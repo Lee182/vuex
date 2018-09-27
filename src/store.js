@@ -38,12 +38,15 @@ export class Store {
 
     // bind commit and dispatch to self
     const store = this
-    const { dispatch, commit } = this
+    const { dispatch, commit, call } = this
     this.dispatch = function boundDispatch (type, payload) {
       return dispatch.call(store, type, payload)
     }
     this.commit = function boundCommit (type, payload, options) {
       return commit.call(store, type, payload, options)
+    }
+    this.call = function boundCall (type, payload, options) {
+      return call.call(store, type, payload, options)
     }
 
     // strict mode
@@ -75,6 +78,37 @@ export class Store {
   set state (v) {
     if (process.env.NODE_ENV !== 'production') {
       assert(false, `use store.replaceState() to explicit replace store state.`)
+    }
+  }
+
+  call (_type, _payload) {
+    const {
+      type,
+      payload
+    } = unifyObjectStyle(_type, _payload)
+
+    const arg = { type, payload }
+    const entryAction = this._actions[type]
+    if (entryAction) {
+      this._actionSubscribers.forEach(sub => sub(arg, this.state))
+      return entryAction.length > 1
+        ? Promise.all(entryAction.map(handler => handler(payload)))
+        : entryAction[0](payload)
+    }
+
+    const entryMutation = this._mutations[type]
+    if (entryMutation) {
+      this._withCommit(() => {
+        entryMutation.forEach(function commitIterator (handler) {
+          handler(payload)
+        })
+      })
+      this._subscribers.forEach(sub => sub(arg, this.state))
+    }
+
+    if (!entryAction && !entryMutation) {
+      console.error(`[vuex] unknown call: ${type}`)
+      return
     }
   }
 
@@ -347,6 +381,22 @@ function makeLocalContext (store, namespace, path) {
       }
 
       store.commit(type, payload, options)
+    },
+
+    call: noNamespace ? store.call : (_type, _payload, _options) => {
+      const args = unifyObjectStyle(_type, _payload, _options)
+      const { payload, options } = args
+      let { type } = args
+
+      if (!options || !options.root) {
+        type = namespace + type
+        if (process.env.NODE_ENV !== 'production' && !store._actions[type] && !store._mutations[type]) {
+          console.error(`[vuex] unknown local call type: ${args.type}, global type: ${type}`)
+          return
+        }
+      }
+
+      return store.call(type, payload, options)
     }
   }
 
@@ -402,30 +452,26 @@ function registerAction (store, type, handler, local) {
     let res = handler.call(store, {
       dispatch: local.dispatch,
       commit: local.commit,
+      call: local.call,
       getters: local.getters,
       state: local.state,
       rootGetters: store.getters,
       rootState: store.state
     }, payload, cb)
-    if (!isPromise(res)) {
-      res = Promise.resolve(res)
-    }
+    res = !isPromise(res) ? Promise.resolve(res) : res
     if (store._devtoolHook) {
       return res.catch(err => {
         store._devtoolHook.emit('vuex:error', err)
         throw err
       })
-    } else {
-      return res
     }
+    return res
   })
 }
 
 function registerGetter (store, type, rawGetter, local) {
   if (store._wrappedGetters[type]) {
-    if (process.env.NODE_ENV !== 'production') {
-      console.error(`[vuex] duplicate getter key: ${type}`)
-    }
+    console.error(`[vuex] duplicate getter key: ${type}`)
     return
   }
   store._wrappedGetters[type] = function wrappedGetter (store) {

@@ -1,28 +1,28 @@
-export const mapMutations = wrapMethod('mapMutations', false, function ({store, val, args}) {
+export const mapMutations = wrapMethod('mapMutations', false, function ({ store, val, args }) {
   return typeof val === 'function'
     ? val.apply(this, [store.commit].concat(args))
     : store.commit.apply(this.$store, [val].concat(args))
 })
 
-export const mapActions = wrapMethod('mapActions', false, function ({store, val, args}) {
+export const mapActions = wrapMethod('mapActions', false, function ({ store, val, args }) {
   return typeof val === 'function'
-    ? val.apply(this, [dispatch].concat(args))
-    : dispatch.apply(this.$store, [val].concat(args))
+    ? val.apply(this, [store.dispatch].concat(args))
+    : store.dispatch.apply(this.$store, [val].concat(args))
 })
 
-export const mapState = wrapMethod('mapState', true, function ({store, val}) {
+export const mapState = wrapMethod('mapState', true, function ({ store, val }) {
   return typeof val === 'function' ? val.call(this, store.state, store.getters) : store.state[val]
 })
 
-export const mapGetters = wrapMethod('mapGetters', true, function ({namespaceVal}) {
-  if(!(val in this.$store.getters)) {
-    console.error(`[vuex] unknown getter: ${val}`)
+export const mapGetters = wrapMethod('mapGetters', true, function ({ val, namespaceVal }) {
+  if (!(namespaceVal in this.$store.getters)) {
+    console.error(`[vuex] unknown getter: ${namespaceVal}`)
     return
   }
-  return this.$store.getters[val]
+  return this.$store.getters[namespaceVal]
 })
 
-export const inject = wrapMethod('inject', true, function ({store, val, namespaceVal}) {
+export const inject = wrapMethod('inject', true, function ({ store, val, namespaceVal }) {
   if (namespaceVal in this.$store.getters) {
     return this.$store.getters[namespaceVal]
   }
@@ -63,8 +63,9 @@ export const createNamespacedHelpers = (namespace) => {
   const methods = {
     mapState, mapGetters, inject, mapActions, mapMutations
   }
-  Object.keys(methods).reduce((out, key)=>{
+  return Object.keys(methods).reduce((out, key) => {
     out[key] = methods[key].bind(null, namespace)
+    return out
   }, {})
 }
 

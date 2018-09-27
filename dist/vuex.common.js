@@ -332,11 +332,15 @@ var Store = function Store (options) {
   var ref = this;
   var dispatch = ref.dispatch;
   var commit = ref.commit;
+  var call = ref.call;
   this.dispatch = function boundDispatch (type, payload) {
     return dispatch.call(store, type, payload)
   };
   this.commit = function boundCommit (type, payload, options) {
     return commit.call(store, type, payload, options)
+  };
+  this.call = function boundCall (type, payload, options) {
+    return call.call(store, type, payload, options)
   };
 
   // strict mode
@@ -370,6 +374,38 @@ prototypeAccessors.state.get = function () {
 prototypeAccessors.state.set = function (v) {
   if (process.env.NODE_ENV !== 'production') {
     assert(false, "use store.replaceState() to explicit replace store state.");
+  }
+};
+
+Store.prototype.call = function call (_type, _payload) {
+    var this$1 = this;
+
+  var ref = unifyObjectStyle(_type, _payload);
+    var type = ref.type;
+    var payload = ref.payload;
+
+  var arg = { type: type, payload: payload };
+  var entryAction = this._actions[type];
+  if (entryAction) {
+    this._actionSubscribers.forEach(function (sub) { return sub(arg, this$1.state); });
+    return entryAction.length > 1
+      ? Promise.all(entryAction.map(function (handler) { return handler(payload); }))
+      : entryAction[0](payload)
+  }
+
+  var entryMutation = this._mutations[type];
+  if (entryMutation) {
+    this._withCommit(function () {
+      entryMutation.forEach(function commitIterator (handler) {
+        handler(payload);
+      });
+    });
+    this._subscribers.forEach(function (sub) { return sub(arg, this$1.state); });
+  }
+
+  if (!entryAction && !entryMutation) {
+    console.error(("[vuex] unknown call: " + type));
+    return
   }
 };
 
@@ -655,6 +691,23 @@ function makeLocalContext (store, namespace, path) {
       }
 
       store.commit(type, payload, options);
+    },
+
+    call: noNamespace ? store.call : function (_type, _payload, _options) {
+      var args = unifyObjectStyle(_type, _payload, _options);
+      var payload = args.payload;
+      var options = args.options;
+      var type = args.type;
+
+      if (!options || !options.root) {
+        type = namespace + type;
+        if (process.env.NODE_ENV !== 'production' && !store._actions[type] && !store._mutations[type]) {
+          console.error(("[vuex] unknown local call type: " + (args.type) + ", global type: " + type));
+          return
+        }
+      }
+
+      return store.call(type, payload, options)
     }
   };
 
@@ -710,30 +763,26 @@ function registerAction (store, type, handler, local) {
     var res = handler.call(store, {
       dispatch: local.dispatch,
       commit: local.commit,
+      call: local.call,
       getters: local.getters,
       state: local.state,
       rootGetters: store.getters,
       rootState: store.state
     }, payload, cb);
-    if (!isPromise(res)) {
-      res = Promise.resolve(res);
-    }
+    res = !isPromise(res) ? Promise.resolve(res) : res;
     if (store._devtoolHook) {
       return res.catch(function (err) {
         store._devtoolHook.emit('vuex:error', err);
         throw err
       })
-    } else {
-      return res
     }
+    return res
   });
 }
 
 function registerGetter (store, type, rawGetter, local) {
   if (store._wrappedGetters[type]) {
-    if (process.env.NODE_ENV !== 'production') {
-      console.error(("[vuex] duplicate getter key: " + type));
-    }
+    console.error(("[vuex] duplicate getter key: " + type));
     return
   }
   store._wrappedGetters[type] = function wrappedGetter (store) {
@@ -798,12 +847,13 @@ var mapMutations = wrapMethod('mapMutations', false, function (ref) {
 });
 
 var mapActions = wrapMethod('mapActions', false, function (ref) {
+  var store = ref.store;
   var val = ref.val;
   var args = ref.args;
 
   return typeof val === 'function'
-    ? val.apply(this, [dispatch].concat(args))
-    : dispatch.apply(this.$store, [val].concat(args))
+    ? val.apply(this, [store.dispatch].concat(args))
+    : store.dispatch.apply(this.$store, [val].concat(args))
 });
 
 var mapState = wrapMethod('mapState', true, function (ref) {
@@ -814,11 +864,13 @@ var mapState = wrapMethod('mapState', true, function (ref) {
 });
 
 var mapGetters = wrapMethod('mapGetters', true, function (ref) {
-  if(!(val in this.$store.getters)) {
-    console.error(("[vuex] unknown getter: " + val));
+  var namespaceVal = ref.namespaceVal;
+
+  if (!(namespaceVal in this.$store.getters)) {
+    console.error(("[vuex] unknown getter: " + namespaceVal));
     return
   }
-  return this.$store.getters[val]
+  return this.$store.getters[namespaceVal]
 });
 
 var inject = wrapMethod('inject', true, function (ref) {
@@ -852,7 +904,7 @@ function wrapMethod (name, isStatey, method) {
           store = storeModule.context;
         }
         var namespaceVal = namespace + val;
-        method.call(this, { store: store, val: val, args: args, namespaceVal: namespaceVal });
+        return method.call(this, { store: store, val: val, args: args, namespaceVal: namespaceVal })
       };
       if (isStatey) {
         // mark vuex getter for devtools
@@ -872,9 +924,10 @@ var createNamespacedHelpers = function (namespace) {
   var methods = {
     mapState: mapState, mapGetters: mapGetters, inject: inject, mapActions: mapActions, mapMutations: mapMutations
   };
-  Object.keys(methods).reduce(function (out, key){
+  return Object.keys(methods).reduce(function (out, key) {
     out[key] = methods[key].bind(null, namespace);
-  }, {});
+    return out
+  }, {})
 };
 
 /**
