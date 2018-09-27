@@ -1,6 +1,6 @@
 /**
  * vuex v3.0.1
- * (c) 2017 Evan You
+ * (c) 2018 Evan You
  * @license MIT
  */
 (function (global, factory) {
@@ -73,6 +73,8 @@ function devtoolPlugin (store) {
  * @param {Function} f
  * @return {*}
  */
+
+
 /**
  * Deep copy the given object considering circular structure.
  * This function caches all nested objects and its copies.
@@ -103,11 +105,16 @@ function assert (condition, msg) {
   if (!condition) { throw new Error(("[vuex] " + msg)) }
 }
 
+// Base data struct for store's module, package with some attribute and method
 var Module = function Module (rawModule, runtime) {
   this.runtime = runtime;
+  // Store some children item
   this._children = Object.create(null);
+  // Store the origin module object which passed by programmer
   this._rawModule = rawModule;
   var rawState = rawModule.state;
+
+  // Store the origin module's state
   this.state = (typeof rawState === 'function' ? rawState() : rawState) || {};
 };
 
@@ -307,16 +314,11 @@ var Store = function Store (options) {
   {
     assert(Vue, "must call Vue.use(Vuex) before creating a store instance.");
     assert(typeof Promise !== 'undefined', "vuex requires a Promise polyfill in this browser.");
-    assert(this instanceof Store, "Store must be called with the new operator.");
+    assert(this instanceof Store, "store must be called with the new operator.");
   }
 
   var plugins = options.plugins; if ( plugins === void 0 ) plugins = [];
   var strict = options.strict; if ( strict === void 0 ) strict = false;
-
-  var state = options.state; if ( state === void 0 ) state = {};
-  if (typeof state === 'function') {
-    state = state() || {};
-  }
 
   // store internal state
   this._committing = false;
@@ -344,6 +346,8 @@ var Store = function Store (options) {
   // strict mode
   this.strict = strict;
 
+  var state = this._modules.root.state;
+
   // init root module.
   // this also recursively registers all sub-modules
   // and collects all module getters inside this._wrappedGetters
@@ -369,7 +373,7 @@ prototypeAccessors.state.get = function () {
 
 prototypeAccessors.state.set = function (v) {
   {
-    assert(false, "Use store.replaceState() to explicit replace store state.");
+    assert(false, "use store.replaceState() to explicit replace store state.");
   }
 };
 
@@ -749,7 +753,7 @@ function registerGetter (store, type, rawGetter, local) {
 function enableStrictMode (store) {
   store._vm.$watch(function () { return this._data.$$state }, function () {
     {
-      assert(store._committing, "Do not mutate vuex store state outside mutation handlers.");
+      assert(store._committing, "do not mutate vuex store state outside mutation handlers.");
     }
   }, { deep: true, sync: true });
 }
@@ -768,7 +772,7 @@ function unifyObjectStyle (type, payload, options) {
   }
 
   {
-    assert(typeof type === 'string', ("Expects string as the type, but found " + (typeof type) + "."));
+    assert(typeof type === 'string', ("expects string as the type, but found " + (typeof type) + "."));
   }
 
   return { type: type, payload: payload, options: options }
@@ -787,121 +791,114 @@ function install (_Vue) {
   applyMixin(Vue);
 }
 
-var mapState = normalizeNamespace(function (namespace, states) {
-  var res = {};
-  normalizeMap(states).forEach(function (ref) {
-    var key = ref.key;
-    var val = ref.val;
+var mapMutations = wrapMethod('mapMutations', false, function (ref) {
+  var store = ref.store;
+  var val = ref.val;
+  var args = ref.args;
 
-    res[key] = function mappedState () {
-      var state = this.$store.state;
-      var getters = this.$store.getters;
-      if (namespace) {
-        var module = getModuleByNamespace(this.$store, 'mapState', namespace);
-        if (!module) {
-          return
+  return typeof val === 'function'
+    ? val.apply(this, [store.commit].concat(args))
+    : store.commit.apply(this.$store, [val].concat(args))
+});
+
+var mapActions = wrapMethod('mapActions', false, function (ref) {
+  var val = ref.val;
+  var args = ref.args;
+
+  return typeof val === 'function'
+    ? val.apply(this, [dispatch].concat(args))
+    : dispatch.apply(this.$store, [val].concat(args))
+});
+
+var mapState = wrapMethod('mapState', true, function (ref) {
+  var store = ref.store;
+  var val = ref.val;
+
+  return typeof val === 'function' ? val.call(this, store.state, store.getters) : store.state[val]
+});
+
+var mapGetters = wrapMethod('mapGetters', true, function (ref) {
+  if(!(val in this.$store.getters)) {
+    console.error(("[vuex] unknown getter: " + val));
+    return
+  }
+  return this.$store.getters[val]
+});
+
+var inject = wrapMethod('inject', true, function (ref) {
+  var store = ref.store;
+  var val = ref.val;
+  var namespaceVal = ref.namespaceVal;
+
+  if (namespaceVal in this.$store.getters) {
+    return this.$store.getters[namespaceVal]
+  }
+  return typeof val === 'function' ? val.call(this, store.state, store.getters) : store.state[val]
+});
+
+function wrapMethod (name, isStatey, method) {
+  return normalizeNamespace(function (namespace, items) {
+    var res = {};
+    normalizeMap(items).forEach(function (ref) {
+      var key = ref.key;
+      var val = ref.val;
+
+      res[key] = function injectedItem () {
+        var args = [], len = arguments.length;
+        while ( len-- ) args[ len ] = arguments[ len ];
+
+        var store = this.$store;
+        if (namespace) {
+          var storeModule = getModuleByNamespace(this.$store, name, namespace);
+          if (!storeModule) {
+            return
+          }
+          store = storeModule.context;
         }
-        state = module.context.state;
-        getters = module.context.getters;
+        var namespaceVal = namespace + val;
+        method.call(this, { store: store, val: val, args: args, namespaceVal: namespaceVal });
+      };
+      if (isStatey) {
+        // mark vuex getter for devtools
+        res[key].vuex = true;
       }
-      return typeof val === 'function'
-        ? val.call(this, state, getters)
-        : state[val]
-    };
-    // mark vuex getter for devtools
-    res[key].vuex = true;
-  });
-  return res
-});
+    });
+    return res
+  })
+}
 
-var mapMutations = normalizeNamespace(function (namespace, mutations) {
-  var res = {};
-  normalizeMap(mutations).forEach(function (ref) {
-    var key = ref.key;
-    var val = ref.val;
+/**
+ * Rebinding namespace param for mapXXX function in special scoped, and return them by simple object
+ * @param {String} namespace
+ * @return {Object}
+ */
+var createNamespacedHelpers = function (namespace) {
+  var methods = {
+    mapState: mapState, mapGetters: mapGetters, inject: inject, mapActions: mapActions, mapMutations: mapMutations
+  };
+  Object.keys(methods).reduce(function (out, key){
+    out[key] = methods[key].bind(null, namespace);
+  }, {});
+};
 
-    res[key] = function mappedMutation () {
-      var args = [], len = arguments.length;
-      while ( len-- ) args[ len ] = arguments[ len ];
-
-      var commit = this.$store.commit;
-      if (namespace) {
-        var module = getModuleByNamespace(this.$store, 'mapMutations', namespace);
-        if (!module) {
-          return
-        }
-        commit = module.context.commit;
-      }
-      return typeof val === 'function'
-        ? val.apply(this, [commit].concat(args))
-        : commit.apply(this.$store, [val].concat(args))
-    };
-  });
-  return res
-});
-
-var mapGetters = normalizeNamespace(function (namespace, getters) {
-  var res = {};
-  normalizeMap(getters).forEach(function (ref) {
-    var key = ref.key;
-    var val = ref.val;
-
-    val = namespace + val;
-    res[key] = function mappedGetter () {
-      if (namespace && !getModuleByNamespace(this.$store, 'mapGetters', namespace)) {
-        return
-      }
-      if ("development" !== 'production' && !(val in this.$store.getters)) {
-        console.error(("[vuex] unknown getter: " + val));
-        return
-      }
-      return this.$store.getters[val]
-    };
-    // mark vuex getter for devtools
-    res[key].vuex = true;
-  });
-  return res
-});
-
-var mapActions = normalizeNamespace(function (namespace, actions) {
-  var res = {};
-  normalizeMap(actions).forEach(function (ref) {
-    var key = ref.key;
-    var val = ref.val;
-
-    res[key] = function mappedAction () {
-      var args = [], len = arguments.length;
-      while ( len-- ) args[ len ] = arguments[ len ];
-
-      var dispatch = this.$store.dispatch;
-      if (namespace) {
-        var module = getModuleByNamespace(this.$store, 'mapActions', namespace);
-        if (!module) {
-          return
-        }
-        dispatch = module.context.dispatch;
-      }
-      return typeof val === 'function'
-        ? val.apply(this, [dispatch].concat(args))
-        : dispatch.apply(this.$store, [val].concat(args))
-    };
-  });
-  return res
-});
-
-var createNamespacedHelpers = function (namespace) { return ({
-  mapState: mapState.bind(null, namespace),
-  mapGetters: mapGetters.bind(null, namespace),
-  mapMutations: mapMutations.bind(null, namespace),
-  mapActions: mapActions.bind(null, namespace)
-}); };
-
+/**
+ * Normalize the map
+ * normalizeMap([1, 2, 3]) => [ { key: 1, val: 1 }, { key: 2, val: 2 }, { key: 3, val: 3 } ]
+ * normalizeMap({a: 1, b: 2, c: 3}) => [ { key: 'a', val: 1 }, { key: 'b', val: 2 }, { key: 'c', val: 3 } ]
+ * @param {Array|Object} map
+ * @return {Object}
+ */
 function normalizeMap (map) {
   return Array.isArray(map)
     ? map.map(function (key) { return ({ key: key, val: key }); })
     : Object.keys(map).map(function (key) { return ({ key: key, val: map[key] }); })
 }
 
+/**
+ * Return a function expect two param contains namespace and map. it will normalize the namespace and then the param's function will handle the new namespace and the map.
+ * @param {Function} fn
+ * @return {Function}
+ */
 function normalizeNamespace (fn) {
   return function (namespace, map) {
     if (typeof namespace !== 'string') {
@@ -914,6 +911,13 @@ function normalizeNamespace (fn) {
   }
 }
 
+/**
+ * Search a special module from store by namespace. if module not exist, print error message.
+ * @param {Object} store
+ * @param {String} helper
+ * @param {String} namespace
+ * @return {Object}
+ */
 function getModuleByNamespace (store, helper, namespace) {
   var module = store._modulesNamespaceMap[namespace];
   if ("development" !== 'production' && !module) {
@@ -930,7 +934,8 @@ var index = {
   mapMutations: mapMutations,
   mapGetters: mapGetters,
   mapActions: mapActions,
-  createNamespacedHelpers: createNamespacedHelpers
+  createNamespacedHelpers: createNamespacedHelpers,
+  inject: inject
 };
 
 return index;

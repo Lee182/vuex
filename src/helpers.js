@@ -1,125 +1,72 @@
-/**
- * Reduce the code which written in Vue.js for getting the state.
- * @param {String} [namespace] - Module's namespace
- * @param {Object|Array} states # Object's item can be a function which accept state and getters for param, you can do something for state and getters in it.
- * @param {Object}
- */
-export const mapState = normalizeNamespace((namespace, states) => {
-  const res = {}
-  normalizeMap(states).forEach(({ key, val }) => {
-    res[key] = function mappedState () {
-      let state = this.$store.state
-      let getters = this.$store.getters
-      if (namespace) {
-        const module = getModuleByNamespace(this.$store, 'mapState', namespace)
-        if (!module) {
-          return
-        }
-        state = module.context.state
-        getters = module.context.getters
-      }
-      return typeof val === 'function'
-        ? val.call(this, state, getters)
-        : state[val]
-    }
-    // mark vuex getter for devtools
-    res[key].vuex = true
-  })
-  return res
+export const mapMutations = wrapMethod('mapMutations', false, function ({store, val, args}) {
+  return typeof val === 'function'
+    ? val.apply(this, [store.commit].concat(args))
+    : store.commit.apply(this.$store, [val].concat(args))
 })
 
-/**
- * Reduce the code which written in Vue.js for committing the mutation
- * @param {String} [namespace] - Module's namespace
- * @param {Object|Array} mutations # Object's item can be a function which accept `commit` function as the first param, it can accept anthor params. You can commit mutation and do any other things in this function. specially, You need to pass anthor params from the mapped function.
- * @return {Object}
- */
-export const mapMutations = normalizeNamespace((namespace, mutations) => {
-  const res = {}
-  normalizeMap(mutations).forEach(({ key, val }) => {
-    res[key] = function mappedMutation (...args) {
-      // Get the commit method from store
-      let commit = this.$store.commit
-      if (namespace) {
-        const module = getModuleByNamespace(this.$store, 'mapMutations', namespace)
-        if (!module) {
-          return
-        }
-        commit = module.context.commit
-      }
-      return typeof val === 'function'
-        ? val.apply(this, [commit].concat(args))
-        : commit.apply(this.$store, [val].concat(args))
-    }
-  })
-  return res
+export const mapActions = wrapMethod('mapActions', false, function ({store, val, args}) {
+  return typeof val === 'function'
+    ? val.apply(this, [dispatch].concat(args))
+    : dispatch.apply(this.$store, [val].concat(args))
 })
 
-/**
- * Reduce the code which written in Vue.js for getting the getters
- * @param {String} [namespace] - Module's namespace
- * @param {Object|Array} getters
- * @return {Object}
- */
-export const mapGetters = normalizeNamespace((namespace, getters) => {
-  const res = {}
-  normalizeMap(getters).forEach(({ key, val }) => {
-    // thie namespace has been mutate by normalizeNamespace
-    val = namespace + val
-    res[key] = function mappedGetter () {
-      if (namespace && !getModuleByNamespace(this.$store, 'mapGetters', namespace)) {
-        return
-      }
-      if (process.env.NODE_ENV !== 'production' && !(val in this.$store.getters)) {
-        console.error(`[vuex] unknown getter: ${val}`)
-        return
-      }
-      return this.$store.getters[val]
-    }
-    // mark vuex getter for devtools
-    res[key].vuex = true
-  })
-  return res
+export const mapState = wrapMethod('mapState', true, function ({store, val}) {
+  return typeof val === 'function' ? val.call(this, store.state, store.getters) : store.state[val]
 })
 
-/**
- * Reduce the code which written in Vue.js for dispatch the action
- * @param {String} [namespace] - Module's namespace
- * @param {Object|Array} actions # Object's item can be a function which accept `dispatch` function as the first param, it can accept anthor params. You can dispatch action and do any other things in this function. specially, You need to pass anthor params from the mapped function.
- * @return {Object}
- */
-export const mapActions = normalizeNamespace((namespace, actions) => {
-  const res = {}
-  normalizeMap(actions).forEach(({ key, val }) => {
-    res[key] = function mappedAction (...args) {
-      // get dispatch function from store
-      let dispatch = this.$store.dispatch
-      if (namespace) {
-        const module = getModuleByNamespace(this.$store, 'mapActions', namespace)
-        if (!module) {
-          return
-        }
-        dispatch = module.context.dispatch
-      }
-      return typeof val === 'function'
-        ? val.apply(this, [dispatch].concat(args))
-        : dispatch.apply(this.$store, [val].concat(args))
-    }
-  })
-  return res
+export const mapGetters = wrapMethod('mapGetters', true, function ({namespaceVal}) {
+  if(!(val in this.$store.getters)) {
+    console.error(`[vuex] unknown getter: ${val}`)
+    return
+  }
+  return this.$store.getters[val]
 })
+
+export const inject = wrapMethod('inject', true, function ({store, val, namespaceVal}) {
+  if (namespaceVal in this.$store.getters) {
+    return this.$store.getters[namespaceVal]
+  }
+  return typeof val === 'function' ? val.call(this, store.state, store.getters) : store.state[val]
+})
+
+function wrapMethod (name, isStatey, method) {
+  return normalizeNamespace((namespace, items) => {
+    const res = {}
+    normalizeMap(items).forEach(({ key, val }) => {
+      res[key] = function injectedItem (...args) {
+        let store = this.$store
+        if (namespace) {
+          const storeModule = getModuleByNamespace(this.$store, name, namespace)
+          if (!storeModule) {
+            return
+          }
+          store = storeModule.context
+        }
+        const namespaceVal = namespace + val
+        return method.call(this, { store, val, args, namespaceVal })
+      }
+      if (isStatey) {
+        // mark vuex getter for devtools
+        res[key].vuex = true
+      }
+    })
+    return res
+  })
+}
 
 /**
  * Rebinding namespace param for mapXXX function in special scoped, and return them by simple object
  * @param {String} namespace
  * @return {Object}
  */
-export const createNamespacedHelpers = (namespace) => ({
-  mapState: mapState.bind(null, namespace),
-  mapGetters: mapGetters.bind(null, namespace),
-  mapMutations: mapMutations.bind(null, namespace),
-  mapActions: mapActions.bind(null, namespace)
-})
+export const createNamespacedHelpers = (namespace) => {
+  const methods = {
+    mapState, mapGetters, inject, mapActions, mapMutations
+  }
+  Object.keys(methods).reduce((out, key)=>{
+    out[key] = methods[key].bind(null, namespace)
+  }, {})
+}
 
 /**
  * Normalize the map
